@@ -27,7 +27,7 @@ app.get("/api/health", (req, res) => {
 
 // ── Routes ───────────────────────────────────────────────
 // Uncomment as each phase's routes are built:
-// app.use("/api/auth", require("./routes/authRoutes"));
+app.use("/api/auth", require("./routes/authRoutes"));
 // app.use("/api/reports", require("./routes/reportRoutes"));
 // app.use("/api/issues", require("./routes/issueRoutes"));
 // app.use("/api/villages", require("./routes/villageRoutes"));
