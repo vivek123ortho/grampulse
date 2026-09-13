@@ -5,10 +5,18 @@
 // LangChain's withStructuredOutput uses the model's native tool/function-calling
 // under the hood, so the schema is enforced by the API itself, not just by
 // asking nicely in the prompt text.
+//
+// IMPORTANT: models are fetched lazily via getTextModel()/getVisionModel()
+// INSIDE each function call, not at the top of this file. If we called
+// getTextModel() at import time, a missing GROQ_API_KEY would throw the
+// moment this file is required (e.g. when the server boots), crashing the
+// whole app before it starts. Fetching lazily means a missing key only
+// affects the one request that needed it — it gets caught below and
+// degrades to the fallback object instead.
 
 const { PromptTemplate } = require("@langchain/core/prompts");
 const { HumanMessage } = require("@langchain/core/messages");
-const { textModel, visionModel } = require("./models");
+const { getTextModel, getVisionModel } = require("./models");
 const { ReportClassificationSchema, ImageAnalysisSchema } = require("./schemas");
 
 const classificationPrompt = PromptTemplate.fromTemplate(`You are an assistant that classifies rural infrastructure problem reports.
@@ -26,44 +34,53 @@ Important rules:
 - Never claim a government authority has already been notified.
 - If the text is too vague to classify confidently, still give your best guess but lower the confidence value.`);
 
-// Structured model: the schema is bound directly to the model call.
-const structuredTextModel = textModel.withStructuredOutput(ReportClassificationSchema, {
-  name: "classify_report",
-});
+const CLASSIFICATION_FALLBACK = {
+  category: "other",
+  subcategory: "unclassified",
+  severity: "medium",
+  confidence: 0,
+  reasoning: "AI classification unavailable — flagged for manual review.",
+  recommendedAction: "Manual review required.",
+  source: "fallback",
+};
 
 /**
  * Classify a text report using the LangChain chain (prompt -> structured model).
- * Falls back to a safe default object if the call fails, so a failed AI call
- * never blocks a report from being saved.
+ * Falls back to a safe default object if the call fails for ANY reason
+ * (missing API key, network error, rate limit, malformed response) — a
+ * failed AI call must never block a report from being saved.
  */
 async function classifyReportChain(reportText) {
   try {
+    const model = getTextModel().withStructuredOutput(ReportClassificationSchema, {
+      name: "classify_report",
+    });
     const formattedPrompt = await classificationPrompt.format({ reportText });
-    const result = await structuredTextModel.invoke(formattedPrompt);
+    const result = await model.invoke(formattedPrompt);
     return { ...result, source: "ai" };
   } catch (err) {
     console.error("[chains] classifyReportChain failed, using fallback:", err.message);
-    return {
-      category: "other",
-      subcategory: "unclassified",
-      severity: "medium",
-      confidence: 0,
-      reasoning: "AI classification unavailable — flagged for manual review.",
-      recommendedAction: "Manual review required.",
-      source: "fallback",
-    };
+    return { ...CLASSIFICATION_FALLBACK };
   }
 }
 
-const structuredVisionModel = visionModel.withStructuredOutput(ImageAnalysisSchema, {
-  name: "analyze_image",
-});
+const IMAGE_ANALYSIS_FALLBACK = {
+  detectedProblem: "Unable to analyze image",
+  category: "other",
+  severity: "medium",
+  potentialRisk: "",
+  confidence: 0,
+  source: "fallback",
+};
 
 /**
  * Analyze an uploaded image (base64, no data: prefix) using the vision model.
  */
 async function analyzeImageChain(base64Image, mimeType) {
   try {
+    const model = getVisionModel().withStructuredOutput(ImageAnalysisSchema, {
+      name: "analyze_image",
+    });
     const message = new HumanMessage({
       content: [
         {
@@ -76,18 +93,11 @@ async function analyzeImageChain(base64Image, mimeType) {
         },
       ],
     });
-    const result = await structuredVisionModel.invoke([message]);
+    const result = await model.invoke([message]);
     return { ...result, source: "ai" };
   } catch (err) {
     console.error("[chains] analyzeImageChain failed, using fallback:", err.message);
-    return {
-      detectedProblem: "Unable to analyze image",
-      category: "other",
-      severity: "medium",
-      potentialRisk: "",
-      confidence: 0,
-      source: "fallback",
-    };
+    return { ...IMAGE_ANALYSIS_FALLBACK };
   }
 }
 
@@ -106,6 +116,7 @@ Write a 3-4 sentence factual summary suitable for handing to a district officer.
 
 async function generateEscalationSummaryChain(issue) {
   try {
+    const model = getTextModel();
     const formattedPrompt = await escalationPrompt.format({
       category: issue.category,
       severity: issue.severity,
@@ -114,7 +125,7 @@ async function generateEscalationSummaryChain(issue) {
       daysUnresolved: issue.daysUnresolved ?? "unknown",
       description: issue.description,
     });
-    const result = await textModel.invoke(formattedPrompt);
+    const result = await model.invoke(formattedPrompt);
     return result.content;
   } catch (err) {
     console.error("[chains] generateEscalationSummaryChain failed:", err.message);
@@ -123,3 +134,4 @@ async function generateEscalationSummaryChain(issue) {
 }
 
 module.exports = { classifyReportChain, analyzeImageChain, generateEscalationSummaryChain };
+

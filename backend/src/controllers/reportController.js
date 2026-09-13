@@ -7,6 +7,7 @@
 const Report = require("../models/Report");
 const { uploadImageBuffer } = require("../utils/imageUpload");
 const { distanceKm } = require("../utils/geo");
+const { classifyReportChain } = require("../langchain/chains");
 
 const NEARBY_RADIUS_KM = 5; // default search radius for "reports near me"
 
@@ -42,6 +43,24 @@ async function createReport(req, res, next) {
       longitude: lng,
       status: "NEW",
     });
+
+    // Phase 3: classify the report with AI immediately after saving it.
+    // Saved first, then analyzed — so a slow/failed AI call never blocks
+    // the citizen from successfully submitting their report.
+    const classification = await classifyReportChain(description);
+
+    report.aiAnalysis = {
+      category: classification.category,
+      subcategory: classification.subcategory,
+      severity: classification.severity,
+      confidence: classification.confidence,
+      reasoning: classification.reasoning,
+      recommendedAction: classification.recommendedAction,
+    };
+    // Trust the AI's severity assessment over the citizen's category pick,
+    // since the AI reads the actual description rather than a dropdown guess.
+    report.severity = classification.severity;
+    await report.save();
 
     res.status(201).json({ report });
   } catch (err) {

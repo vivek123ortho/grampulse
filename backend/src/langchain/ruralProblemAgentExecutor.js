@@ -14,7 +14,7 @@
 
 const { AgentExecutor, createToolCallingAgent } = require("langchain/agents");
 const { ChatPromptTemplate } = require("@langchain/core/prompts");
-const { textModel } = require("./models");
+const { getTextModel } = require("./models");
 const {
   findSimilarReportsTool,
   calculateSeverityTool,
@@ -56,7 +56,7 @@ Guidelines:
 
 async function buildAgentExecutor() {
   const agent = await createToolCallingAgent({
-    llm: textModel,
+    llm: getTextModel(),
     tools,
     prompt: agentPrompt,
   });
